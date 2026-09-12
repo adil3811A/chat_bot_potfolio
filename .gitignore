@@ -36,3 +36,8 @@ coverage/
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Firebase service-account keys — never commit these
+service-account*.json
+*-firebase-adminsdk-*.json
+serviceAccountKey.json

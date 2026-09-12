@@ -1,12 +1,15 @@
-import { GoogleGenAI } from '@google/genai';
+import Groq from 'groq-sdk';
 import { createLogger, preview } from '../logger.js';
+import { getCareerData } from './careerData.js';
 
 const log = createLogger('chat');
 
-// Initialize the Google Gen AI client (reads GEMINI_API_KEY from environment)
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// Groq (console.groq.com) — an inference platform serving open models.
+// Not to be confused with xAI's Grok, which is a different product entirely.
+export const API_KEY = process.env.GROQ_API_KEY;
+const groq = new Groq({ apiKey: API_KEY });
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+export const MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
 
 // The model emits this exact token instead of answering an off-topic prompt.
 // It is a control signal, never shown to the visitor — it gets swapped for
@@ -57,7 +60,34 @@ Flutter, Dart, Kotlin/Java, Jetpack Compose, Bloc/Riverpod/GetX, MVVM/Clean Arch
 Bachelor's in Software Development — TISS, Mumbai (2022–2025)
 `;
 
-const generationConfig = { systemInstruction: SYSTEM_INSTRUCTION };
+/**
+ * The prompt is assembled per request because the career metrics come from
+ * Firestore and change without a redeploy. When the DB is unreachable the
+ * section is left out entirely, so the bot falls back to "I don't have that
+ * info" rather than reciting stale numbers.
+ */
+async function buildMessages(rlog, message) {
+  const liveCareerData = await getCareerData();
+
+  let systemPrompt = SYSTEM_INSTRUCTION;
+  if (!liveCareerData) {
+    rlog.debug('No live career metrics — using static profile only');
+  } else {
+    systemPrompt = `${SYSTEM_INSTRUCTION}
+
+=== LIVE CAREER METRICS (from database — authoritative, overrides anything above) ===
+${liveCareerData}
+
+Use these figures verbatim when asked about availability, notice period, or compensation.
+If a figure is not listed here, say you don't have it and point them to Adil directly —
+never estimate or infer it.`;
+  }
+
+  return [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: message },
+  ];
+}
 
 /**
  * @openapi
@@ -108,7 +138,7 @@ export default async function handler(req, res) {
   rlog.info('Stream started', { model: MODEL, chars: message.length });
   rlog.debug(`Prompt: ${preview(message)}`);
 
-  // Client closed the tab mid-answer — worth knowing, since the Gemini call
+  // Client closed the tab mid-answer — worth knowing, since the upstream call
   // is already billed by then.
   req.on('aborted', () =>
     rlog.warn('Client aborted', { ms: Date.now() - startedAt, chunks })
@@ -121,14 +151,14 @@ export default async function handler(req, res) {
   res.flushHeaders?.();
 
   try {
-    // 3. Request a streaming response from Gemini 2.5 Flash
-    const responseStream = await ai.models.generateContentStream({
+    // 3. Request a streaming completion from Groq
+    const responseStream = await groq.chat.completions.create({
       model: MODEL,
-      contents: message,
-      config: generationConfig,
+      messages: await buildMessages(rlog, message),
+      stream: true,
     });
 
-    // 4. Iterate over chunks as they arrive from Google and push them to your app
+    // 4. Iterate over chunks as they arrive and push them to your app
     rlog.debug('Upstream connected', { ms: Date.now() - startedAt });
 
     // Formatting as data: { "text": "..." }\n\n to comply with standard event streams
@@ -146,7 +176,7 @@ export default async function handler(req, res) {
     let gateOpen = false;
 
     for await (const chunk of responseStream) {
-      const text = chunk.text;
+      const text = chunk.choices[0]?.delta?.content;
       if (!text) continue;
       if (chunks === 0 && !gate) rlog.debug('First chunk', { ms: Date.now() - startedAt });
 
@@ -179,7 +209,7 @@ export default async function handler(req, res) {
     res.write('data: [DONE]\n\n');
     rlog.info('Stream finished', { ms: Date.now() - startedAt, chunks, chars });
   } catch (error) {
-    rlog.error('Gemini stream failed', {
+    rlog.error('Groq stream failed', {
       ms: Date.now() - startedAt,
       chunks,
       status: error.status,
@@ -237,29 +267,30 @@ export async function syncHandler(req, res) {
   rlog.debug(`Prompt: ${preview(message)}`);
 
   try {
-    const response = await ai.models.generateContent({
+    const completion = await groq.chat.completions.create({
       model: MODEL,
-      contents: message,
-      config: generationConfig,
+      messages: await buildMessages(rlog, message),
     });
-    const usage = response.usageMetadata ?? {};
 
-    if ((response.text ?? '').trimStart().startsWith(SENTINEL)) {
+    const text = completion.choices[0]?.message?.content ?? '';
+    const usage = completion.usage ?? {};
+
+    if (text.trimStart().startsWith(SENTINEL)) {
       rlog.info('Off-topic prompt refused', { ms: Date.now() - startedAt });
       return res.json({ text: OFF_TOPIC_REPLY, offTopic: true });
     }
 
     rlog.info('Replied', {
       ms: Date.now() - startedAt,
-      chars: response.text?.length ?? 0,
-      promptTokens: usage.promptTokenCount,
-      outputTokens: usage.candidatesTokenCount,
-      totalTokens: usage.totalTokenCount,
+      chars: text.length,
+      promptTokens: usage.prompt_tokens,
+      outputTokens: usage.completion_tokens,
+      totalTokens: usage.total_tokens,
     });
-    rlog.debug(`Reply: ${preview(response.text ?? '')}`);
-    return res.json({ text: response.text });
+    rlog.debug(`Reply: ${preview(text)}`);
+    return res.json({ text });
   } catch (error) {
-    rlog.error('Gemini call failed', {
+    rlog.error('Groq call failed', {
       ms: Date.now() - startedAt,
       status: error.status,
       err: error.message,

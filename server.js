@@ -5,7 +5,7 @@ import cors from 'cors';
 import morgan from 'morgan';
 import { randomUUID } from 'node:crypto';
 
-import chatHandler, { syncHandler } from './api/chat.js';
+import chatHandler, { syncHandler, MODEL, API_KEY } from './api/chat.js';
 import { swaggerSpec } from './swagger.js';
 import { docsHtml, SWAGGER_UI_VERSION } from './docs.js';
 import { createLogger } from './logger.js';
@@ -86,11 +86,11 @@ app.use(
  *                 hasApiKey: { type: boolean, example: true }
  */
 app.get('/health', (_req, res) =>
-  res.json({ status: 'ok', hasApiKey: Boolean(process.env.GEMINI_API_KEY) })
+  res.json({ status: 'ok', hasApiKey: Boolean(API_KEY) })
 );
 
 // A browser would discard a disallowed response anyway, but the request would
-// still have hit Gemini and burned tokens first — so block it up front.
+// still have hit the model and burned tokens first — so block it up front.
 app.use('/api', (req, res, next) => {
   const origin = req.get('origin');
   if (origin && !isAllowed(origin)) {
@@ -122,14 +122,14 @@ app.listen(PORT, () => {
   log.info(`API     → http://localhost:${PORT}`);
   log.info(`Swagger → http://localhost:${PORT}/docs`);
   log.info('Config', {
-    model: process.env.GEMINI_MODEL || 'gemini-3.6-flash',
+    model: MODEL,
     logLevel: process.env.LOG_LEVEL || 'info',
-    apiKey: process.env.GEMINI_API_KEY ? 'set' : 'MISSING',
+    apiKey: API_KEY ? 'set' : 'MISSING',
     swaggerUi: SWAGGER_UI_VERSION,
   });
   log.info('Allowed origins', { origins: ALLOWED_ORIGINS.join(' ') });
-  if (!process.env.GEMINI_API_KEY) {
-    log.warn('GEMINI_API_KEY is not set — calls to Gemini will fail');
+  if (!API_KEY) {
+    log.warn('GROQ_API_KEY is not set — model calls will fail');
   }
 });
 

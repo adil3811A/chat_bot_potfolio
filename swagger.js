@@ -9,7 +9,7 @@ export const swaggerSpec = swaggerJsdoc({
       title: 'Portfolio Chatbot API',
       version: '1.0.0',
       description:
-        'Gemini-backed chat endpoint for Adil Ansari\'s portfolio site. ' +
+        'Groq-backed chat endpoint for Adil Ansari\'s portfolio site. ' +
         'Use **/api/chat/sync** to test from this page — **/api/chat** streams SSE, ' +
         'which Swagger UI buffers until the stream ends.',
     },
