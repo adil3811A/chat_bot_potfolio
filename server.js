@@ -3,11 +3,11 @@ import 'dotenv/config'; // must run before anything reads process.env
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
-import swaggerUi from 'swagger-ui-express';
 import { randomUUID } from 'node:crypto';
 
 import chatHandler, { syncHandler } from './api/chat.js';
 import { swaggerSpec } from './swagger.js';
+import { docsHtml, SWAGGER_UI_VERSION } from './docs.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('server');
@@ -27,12 +27,11 @@ app.use((req, res, next) => {
   next();
 });
 
-// HTTP access log. Swagger UI pulls in ~40 static assets per page load, so
-// those are skipped to keep the console readable.
+// HTTP access log. Swagger UI's own assets come from the CDN, so nothing
+// needs filtering here any more.
 morgan.token('id', (req) => req.id);
 app.use(
   morgan(':id :method :url :status :res[content-length] - :response-time ms', {
-    skip: (req) => req.path.startsWith('/docs') && req.path !== '/docs/',
     stream: { write: (line) => http.info(line.trim()) },
   })
 );
@@ -63,10 +62,10 @@ app.post('/api/chat', chatHandler);
 app.options('/api/chat', chatHandler);
 app.post('/api/chat/sync', syncHandler);
 
-// Swagger UI + raw spec
-app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-  customSiteTitle: 'Portfolio Chatbot API',
-}));
+// Swagger UI (assets from CDN) + the raw spec it fetches
+app.get('/docs', (_req, res) =>
+  res.type('html').send(docsHtml({ title: 'Portfolio Chatbot API', specUrl: '/openapi.json' }))
+);
 app.get('/openapi.json', (_req, res) => res.json(swaggerSpec));
 
 app.get('/', (_req, res) => res.redirect('/docs'));
@@ -84,6 +83,7 @@ app.listen(PORT, () => {
     model: process.env.GEMINI_MODEL || 'gemini-3.6-flash',
     logLevel: process.env.LOG_LEVEL || 'info',
     apiKey: process.env.GEMINI_API_KEY ? 'set' : 'MISSING',
+    swaggerUi: SWAGGER_UI_VERSION,
   });
   if (!process.env.GEMINI_API_KEY) {
     log.warn('GEMINI_API_KEY is not set — calls to Gemini will fail');
