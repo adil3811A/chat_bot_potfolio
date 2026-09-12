@@ -6,7 +6,7 @@ import morgan from 'morgan';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
-import chatHandler, { syncHandler, MODEL, API_KEY } from './api/chat.js';
+import chatHandler, { syncHandler, MODEL, API_KEY } from './lib/chat.js';
 import { swaggerSpec } from './swagger.js';
 import { docsHtml, SWAGGER_UI_VERSION } from './docs.js';
 import { createLogger } from './logger.js';
