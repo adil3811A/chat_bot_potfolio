@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Secrets — .env holds GEMINI_API_KEY, never commit it
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime / build output
+dist/
+build/
+coverage/
+.cache/
+*.pid
+*.seed
+
+# Deployment platforms
+.vercel
+.netlify
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# OS junk
+.DS_Store
+Thumbs.db
