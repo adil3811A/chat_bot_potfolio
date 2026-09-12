@@ -4,6 +4,7 @@ import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
 import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 
 import chatHandler, { syncHandler, MODEL, API_KEY } from './api/chat.js';
 import { swaggerSpec } from './swagger.js';
@@ -127,20 +128,29 @@ app.use((err, req, res, _next) => {
   if (!res.headersSent) res.status(500).json({ error: 'Internal server error' });
 });
 
-app.listen(PORT, () => {
-  log.info(`API     → http://localhost:${PORT}`);
-  log.info(`Swagger → http://localhost:${PORT}/docs`);
-  log.info('Config', {
-    model: MODEL,
-    logLevel: process.env.LOG_LEVEL || 'info',
-    apiKey: API_KEY ? 'set' : 'MISSING',
-    swaggerUi: SWAGGER_UI_VERSION,
+// On Vercel the app is imported by api/index.js and invoked per request, so it
+// must not bind a port there. Only listen when run directly (`npm start`).
+const isDirectRun =
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectRun) {
+  app.listen(PORT, () => {
+    log.info(`API     → http://localhost:${PORT}`);
+    log.info(`Swagger → http://localhost:${PORT}/docs`);
+    log.info('Config', {
+      model: MODEL,
+      logLevel: process.env.LOG_LEVEL || 'info',
+      apiKey: API_KEY ? 'set' : 'MISSING',
+      swaggerUi: SWAGGER_UI_VERSION,
+    });
+    log.info('Allowed origins', { origins: ALLOWED_ORIGINS.join(' ') });
+    if (!API_KEY) {
+      log.warn('GROQ_API_KEY is not set — model calls will fail');
+    }
   });
-  log.info('Allowed origins', { origins: ALLOWED_ORIGINS.join(' ') });
-  if (!API_KEY) {
-    log.warn('GROQ_API_KEY is not set — model calls will fail');
-  }
-});
+}
+
+export default app;
 
 process.on('unhandledRejection', (reason) =>
   log.error('Unhandled promise rejection', { reason: String(reason) })
