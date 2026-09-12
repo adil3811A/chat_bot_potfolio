@@ -8,6 +8,12 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 
+// The model emits this exact token instead of answering an off-topic prompt.
+// It is a control signal, never shown to the visitor — it gets swapped for
+// OFF_TOPIC_REPLY below.
+const SENTINEL = 'OFF_TOPIC';
+const OFF_TOPIC_REPLY = "I can only answer questions related to Adil Ansari's portfolio.";
+
 // Embed your personal details directly into the system instruction
 const SYSTEM_INSTRUCTION = `
 You are an AI assistant representing Adil Ansari, a mobile app developer, on his personal portfolio website. Recruiters, hiring managers, and potential clients will ask you questions about his work, skills, and experience.
@@ -17,7 +23,13 @@ TONE & BEHAVIOR RULES:
 - Keep answers punchy and conversational — 2-4 sentences for most questions, longer only if the question genuinely needs detail.
 - Be confident but honest — never invent experience, years, job titles, or numbers not listed below.
 - If asked something not covered in this data, say you don't have that info and suggest they contact Adil directly.
-- If asked an unrelated/off-topic question, politely redirect back to Adil's career.
+
+CRITICAL RULE:
+You may ONLY answer questions about Adil — his career, skills, projects, education and contact details.
+If the user asks anything off-topic, asks you to write code, write essays, translate, do maths, roleplay,
+or perform any general-purpose task, you MUST reply with EXACTLY this and nothing else:
+OFF_TOPIC
+No preamble, no apology, no punctuation, no explanation — just that one word.
 
 === ADIL'S PROFILE ===
 Name: Adil Ansari
@@ -80,21 +92,8 @@ const generationConfig = { systemInstruction: SYSTEM_INSTRUCTION };
  *         description: Method not allowed
  */
 export default async function handler(req, res) {
-  // 1. Enable CORS so your Jaspr static site can call this endpoint
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  // Handle preflight OPTIONS request
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
+  // CORS (including the preflight) is handled by the allowlist middleware in
+  // server.js — setting headers here too would override it with a wildcard.
   const rlog = log.child(req.id ?? 'stream');
 
   const { message } = req.body ?? {};
@@ -132,15 +131,51 @@ export default async function handler(req, res) {
     // 4. Iterate over chunks as they arrive from Google and push them to your app
     rlog.debug('Upstream connected', { ms: Date.now() - startedAt });
 
+    // Formatting as data: { "text": "..." }\n\n to comply with standard event streams
+    const send = (text) => {
+      chunks += 1;
+      chars += text.length;
+      res.write(`data: ${JSON.stringify({ text })}\n\n`);
+    };
+
+    // Hold back the opening characters until we know whether they are the
+    // SENTINEL. The model streams token by token, so "OFF_TOPIC" can arrive
+    // split as "OFF" + "_TOP" + "IC" — testing each chunk on its own would
+    // leak those fragments to the visitor before the third one gives it away.
+    let gate = '';
+    let gateOpen = false;
+
     for await (const chunk of responseStream) {
-      if (chunk.text) {
-        if (chunks === 0) rlog.debug('First chunk', { ms: Date.now() - startedAt });
-        chunks += 1;
-        chars += chunk.text.length;
-        // Formatting as data: { "text": "..." }\n\n to comply with standard event streams
-        res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
+      const text = chunk.text;
+      if (!text) continue;
+      if (chunks === 0 && !gate) rlog.debug('First chunk', { ms: Date.now() - startedAt });
+
+      if (gateOpen) {
+        send(text);
+        continue;
       }
+
+      gate += text;
+      const probe = gate.trimStart();
+
+      if (probe.startsWith(SENTINEL)) {
+        rlog.info('Off-topic prompt refused', { ms: Date.now() - startedAt });
+        res.write(`data: ${JSON.stringify({ text: OFF_TOPIC_REPLY, offTopic: true })}\n\n`);
+        res.write('data: [DONE]\n\n');
+        return; // finally{} closes the response; the generator is disposed with it
+      }
+
+      // Still a possible prefix of the sentinel ("OFF", "OFF_TO"…) — keep waiting.
+      if (probe.length < SENTINEL.length && SENTINEL.startsWith(probe)) continue;
+
+      gateOpen = true;
+      send(gate);
+      gate = '';
     }
+
+    // Stream ended while still buffering (a reply shorter than the sentinel).
+    if (!gateOpen && gate) send(gate);
+
     res.write('data: [DONE]\n\n');
     rlog.info('Stream finished', { ms: Date.now() - startedAt, chunks, chars });
   } catch (error) {
@@ -176,6 +211,13 @@ export default async function handler(req, res) {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ChatResponse'
+ *             examples:
+ *               onTopic:
+ *                 summary: A question about Adil
+ *                 value: { text: "Adil is a mobile app developer based in Thane, India." }
+ *               offTopic:
+ *                 summary: Anything else — refused
+ *                 value: { text: "I can only answer questions related to Adil Ansari's portfolio.", offTopic: true }
  *       400:
  *         $ref: '#/components/responses/BadRequest'
  *       500:
@@ -201,6 +243,12 @@ export async function syncHandler(req, res) {
       config: generationConfig,
     });
     const usage = response.usageMetadata ?? {};
+
+    if ((response.text ?? '').trimStart().startsWith(SENTINEL)) {
+      rlog.info('Off-topic prompt refused', { ms: Date.now() - startedAt });
+      return res.json({ text: OFF_TOPIC_REPLY, offTopic: true });
+    }
+
     rlog.info('Replied', {
       ms: Date.now() - startedAt,
       chars: response.text?.length ?? 0,

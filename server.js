@@ -15,8 +15,40 @@ const http = createLogger('http');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const IS_PROD = process.env.NODE_ENV === 'production';
 
-app.use(cors());
+// Only these origins may call the API from a browser. Override in .env with a
+// comma-separated ALLOWED_ORIGINS list.
+const CONFIGURED_ORIGINS = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim().replace(/\/$/, '')).filter(Boolean)
+  : [
+      'https://adil-ansari-portfolio-web.web.app',
+      'https://adil-ansari-portfolio-web.firebaseapp.com',
+      // 'http://localhost:8000',
+    ];
+
+// Swagger UI is served from this same server, and browsers send an Origin
+// header even on same-origin POSTs — so "Try it out" needs its own origin
+// allowed. Dev only; never added in production.
+const SELF_ORIGINS = IS_PROD ? [] : [`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`];
+const ALLOWED_ORIGINS = [...new Set([...CONFIGURED_ORIGINS, ...SELF_ORIGINS])];
+
+const isAllowed = (origin) => ALLOWED_ORIGINS.includes(origin.replace(/\/$/, ''));
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      // No Origin header = not a browser (curl, Postman, server-to-server).
+      // Those aren't bound by the same-origin policy at all, so CORS cannot
+      // restrict them; add a shared secret if the endpoint needs real gating.
+      if (!origin) return callback(null, true);
+      callback(null, isAllowed(origin));
+    },
+    methods: ['POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type'],
+    maxAge: 86400, // cache the preflight for a day
+  })
+);
 app.use(express.json());
 
 // Tag every request so its log lines can be tied together, and echo the id
@@ -57,9 +89,19 @@ app.get('/health', (_req, res) =>
   res.json({ status: 'ok', hasApiKey: Boolean(process.env.GEMINI_API_KEY) })
 );
 
+// A browser would discard a disallowed response anyway, but the request would
+// still have hit Gemini and burned tokens first — so block it up front.
+app.use('/api', (req, res, next) => {
+  const origin = req.get('origin');
+  if (origin && !isAllowed(origin)) {
+    log.warn('Blocked request from disallowed origin', { id: req.id, origin, path: req.path });
+    return res.status(403).json({ error: 'Origin not allowed' });
+  }
+  next();
+});
+
 // Routes
 app.post('/api/chat', chatHandler);
-app.options('/api/chat', chatHandler);
 app.post('/api/chat/sync', syncHandler);
 
 // Swagger UI (assets from CDN) + the raw spec it fetches
@@ -85,6 +127,7 @@ app.listen(PORT, () => {
     apiKey: process.env.GEMINI_API_KEY ? 'set' : 'MISSING',
     swaggerUi: SWAGGER_UI_VERSION,
   });
+  log.info('Allowed origins', { origins: ALLOWED_ORIGINS.join(' ') });
   if (!process.env.GEMINI_API_KEY) {
     log.warn('GEMINI_API_KEY is not set — calls to Gemini will fail');
   }

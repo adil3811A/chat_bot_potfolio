@@ -32,6 +32,11 @@ export const swaggerSpec = swaggerJsdoc({
           type: 'object',
           properties: {
             text: { type: 'string', example: 'Adil recently shipped PannaseCHE, a GATE exam-prep app...' },
+            offTopic: {
+              type: 'boolean',
+              description: 'Present and true when the question was outside Adil\'s portfolio and was refused.',
+              example: true,
+            },
           },
         },
         Error: {
