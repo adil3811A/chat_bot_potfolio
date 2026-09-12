@@ -24,7 +24,7 @@ const CONFIGURED_ORIGINS = process.env.ALLOWED_ORIGINS
   : [
       'https://adil-ansari-portfolio-web.web.app',
       'https://adil-ansari-portfolio-web.firebaseapp.com',
-      // 'http://localhost:8000',
+      'http://localhost:8080', // Jaspr dev server
     ];
 
 // Swagger UI is served from this same server, and browsers send an Origin
@@ -33,7 +33,12 @@ const CONFIGURED_ORIGINS = process.env.ALLOWED_ORIGINS
 const SELF_ORIGINS = IS_PROD ? [] : [`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`];
 const ALLOWED_ORIGINS = [...new Set([...CONFIGURED_ORIGINS, ...SELF_ORIGINS])];
 
-const isAllowed = (origin) => ALLOWED_ORIGINS.includes(origin.replace(/\/$/, ''));
+const isAllowed = (origin) => {
+  if (!origin) return false;
+  // Clean the incoming browser origin header to match our array formatting exactly
+  const cleanOrigin = origin.trim().replace(/\/$/, '');
+  return ALLOWED_ORIGINS.includes(cleanOrigin);
+};
 
 app.use(
   cors({
@@ -42,7 +47,11 @@ app.use(
       // Those aren't bound by the same-origin policy at all, so CORS cannot
       // restrict them; add a shared secret if the endpoint needs real gating.
       if (!origin) return callback(null, true);
-      callback(null, isAllowed(origin));
+
+      if (isAllowed(origin)) return callback(null, true);
+
+      log.warn('Blocked by CORS', { origin });
+      callback(null, false);
     },
     methods: ['POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type'],
