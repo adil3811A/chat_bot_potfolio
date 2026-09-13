@@ -18,6 +18,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production';
 
+// ALLOWED_ORIGINS=* opens the API to every origin. Intended for development
+// against the deployed backend; set it back to a comma-separated list before
+// this is anything but a toy, since it lets any site on the internet spend
+// your Groq quota and read the career metrics.
+const ALLOW_ALL_ORIGINS = process.env.ALLOWED_ORIGINS?.trim() === '*';
+
 // Only these origins may call the API from a browser. Override in .env with a
 // comma-separated ALLOWED_ORIGINS list.
 const CONFIGURED_ORIGINS = process.env.ALLOWED_ORIGINS
@@ -35,6 +41,7 @@ const SELF_ORIGINS = IS_PROD ? [] : [`http://localhost:${PORT}`, `http://127.0.0
 const ALLOWED_ORIGINS = [...new Set([...CONFIGURED_ORIGINS, ...SELF_ORIGINS])];
 
 const isAllowed = (origin) => {
+  if (ALLOW_ALL_ORIGINS) return true;
   if (!origin) return false;
   // Clean the incoming browser origin header to match our array formatting exactly
   const cleanOrigin = origin.trim().replace(/\/$/, '');
@@ -49,6 +56,8 @@ app.use(
       // restrict them; add a shared secret if the endpoint needs real gating.
       if (!origin) return callback(null, true);
 
+      // Reflect the caller's origin rather than sending a literal "*", so the
+      // same code path keeps working if credentials are ever enabled.
       if (isAllowed(origin)) return callback(null, true);
 
       log.warn('Blocked by CORS', { origin });
@@ -143,7 +152,11 @@ if (isDirectRun) {
       apiKey: API_KEY ? 'set' : 'MISSING',
       swaggerUi: SWAGGER_UI_VERSION,
     });
-    log.info('Allowed origins', { origins: ALLOWED_ORIGINS.join(' ') });
+    if (ALLOW_ALL_ORIGINS) {
+      log.warn('CORS is OPEN to all origins (ALLOWED_ORIGINS=*) — do not leave this on');
+    } else {
+      log.info('Allowed origins', { origins: ALLOWED_ORIGINS.join(' ') });
+    }
     if (!API_KEY) {
       log.warn('GROQ_API_KEY is not set — model calls will fail');
     }
